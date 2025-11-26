@@ -17,7 +17,7 @@ axios.interceptors.request.use((config) => {
 });
 
 // ---------- Types ----------
-type Question = { text: string; languages: string[] };
+export type Question = { text: string; languages: string[] };
 
 type DailyEntry = {
   status: "done" | "planned" | "not-done";
@@ -25,7 +25,7 @@ type DailyEntry = {
   languages?: string[];
 };
 
-type DailyMap = Record<string, DailyEntry>;
+export type DailyMap = Record<string, DailyEntry>;
 
 type Star = {
   id: string;
@@ -36,9 +36,9 @@ type Star = {
   inJar: boolean;
 };
 
-type StarMap = Record<string, Star>;
+export type StarMap = Record<string, Star>;
 
-type Sticker = {
+export type Sticker = {
   id: number;
   name: string;
   image: string;
@@ -103,6 +103,16 @@ export const useTrackerStore = create<TrackerState>((set, get) => ({
   },
 
   // ---------------------------------------------------------
+  // Helper: compute max streak from dailyEntries map
+  // ---------------------------------------------------------
+  // Note: counts consecutive 'done' days in chronological order
+  // Expects keys as YYYY-MM-DD strings (or comparable sortable strings).
+  // Returns the longest run of consecutive 'done' statuses.
+  // This keeps the UI responsive by deriving maxStreak locally on optimistic updates.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  // (We declare it here as an internal helper via get(), not part of public TrackerState)
+  // We'll implement it as a local function below when needed.
+
   // Load everything at once (fast)
   // ---------------------------------------------------------
   loadAll: async () => {
@@ -177,9 +187,43 @@ export const useTrackerStore = create<TrackerState>((set, get) => ({
       };
     }
     
+    // compute optimistic max streak locally
+    const computeMaxStreakFromMap = (entries: DailyMap) => {
+      const dates = Object.keys(entries).sort();
+      let max = 0;
+      let current = 0;
+      let prevDate: string | null = null;
+
+      const isConsecutive = (a: string, b: string) => {
+        const da = new Date(a);
+        const db = new Date(b);
+        const diff = (db.getTime() - da.getTime()) / (1000 * 60 * 60 * 24);
+        return diff === 1;
+      };
+
+      for (const d of dates) {
+        const entry = entries[d];
+        if (entry && entry.status === 'done') {
+          if (prevDate && isConsecutive(prevDate, d)) {
+            current += 1;
+          } else {
+            current = 1;
+          }
+          if (current > max) max = current;
+        } else {
+          current = 0;
+        }
+        prevDate = d;
+      }
+      return max;
+    };
+
+    const optimisticMax = computeMaxStreakFromMap(newDailyEntries);
+
     set({ 
       dailyEntries: newDailyEntries,
-      stars: newStars
+      stars: newStars,
+      maxStreak: Math.max(get().maxStreak || 0, optimisticMax),
     });
     
     try {
@@ -211,9 +255,43 @@ export const useTrackerStore = create<TrackerState>((set, get) => ({
     const starId = `star-${date}`;
     delete newStars[starId];
     
+    // recompute max streak after deletion
+    const computeMaxStreakFromMap = (entries: DailyMap) => {
+      const dates = Object.keys(entries).sort();
+      let max = 0;
+      let current = 0;
+      let prevDate: string | null = null;
+
+      const isConsecutive = (a: string, b: string) => {
+        const da = new Date(a);
+        const db = new Date(b);
+        const diff = (db.getTime() - da.getTime()) / (1000 * 60 * 60 * 24);
+        return diff === 1;
+      };
+
+      for (const d of dates) {
+        const entry = entries[d];
+        if (entry && entry.status === 'done') {
+          if (prevDate && isConsecutive(prevDate, d)) {
+            current += 1;
+          } else {
+            current = 1;
+          }
+          if (current > max) max = current;
+        } else {
+          current = 0;
+        }
+        prevDate = d;
+      }
+      return max;
+    };
+
+    const newMax = computeMaxStreakFromMap(newDailyEntries);
+
     set({ 
       dailyEntries: newDailyEntries,
-      stars: newStars
+      stars: newStars,
+      maxStreak: newMax,
     });
     
     try {
@@ -295,9 +373,11 @@ export const useTrackerStore = create<TrackerState>((set, get) => ({
   },
 
   // ---------------------------------------------------------
-  // Refresh data (alias for loadAll)
+  // Refresh data (force fresh from server, bypass cache)
   // ---------------------------------------------------------
   refresh: async () => {
+    // Force refresh by setting lastFetch to 0 to bypass cache
+    set({ lastFetch: 0 });
     await get().loadAll();
   },
 }));

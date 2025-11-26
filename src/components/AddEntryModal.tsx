@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { X, Plus, Trash2 } from "lucide-react";
 import { PixelButton } from "./ui/pixel-button";
 import { format } from "date-fns";
