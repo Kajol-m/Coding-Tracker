@@ -5,12 +5,15 @@ import { getToken } from 'next-auth/jwt'
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
-  // Allow access to auth page and API routes
-  if (pathname.startsWith('/auth') || pathname.startsWith('/api/auth')) {
+  // Public routes that don't require authentication
+  const publicRoutes = ['/auth', '/api/auth']
+  const isPublicRoute = publicRoutes.some(route => pathname.startsWith(route))
+
+  if (isPublicRoute) {
     return NextResponse.next()
   }
 
-  // Check for NextAuth session
+  // Check for NextAuth session (Google OAuth)
   const token = await getToken({ req: request })
   
   // Check for JWT token in cookies (for local auth)
@@ -26,6 +29,7 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.png$|.*\\.jpg$|.*\\.jpeg$|.*\\.gif$|.*\\.svg$).*)',
+    // Match all routes except static files and images
+    '/((?!_next/static|_next/image|favicon.ico|.*\\.png$|.*\\.jpg$|.*\\.jpeg$|.*\\.gif$|.*\\.svg$|.*\\.webp$).*)',
   ],
 }

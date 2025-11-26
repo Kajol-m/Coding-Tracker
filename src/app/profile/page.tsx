@@ -1,32 +1,49 @@
 "use client";
-import {useEffect } from "react";
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, User, Mail,LogOut } from "lucide-react";
+import { ArrowLeft, User, Mail, LogOut } from "lucide-react";
 import { useTrackerStore } from "@/lib/store/userTrackerStore";
 import { signOut, useSession } from "next-auth/react";
+import { useAuthGuard } from "@/hooks/useAuthGuard";
 
 export default function Profile() {
   // Type for star entries in the tracker store
   type Star = { inJar?: boolean };
   const router = useRouter();
   const { data: session } = useSession();
+  const isAuthorized = useAuthGuard(); // Use auth guard hook
   const stars = useTrackerStore((s) => s.stars);
   const stickers = useTrackerStore((s) => s.stickers);
   const loadAll = useTrackerStore((s) => s.loadAll);
   const loadUser = useTrackerStore((s) => s.loadUser);
+  const setUser = useTrackerStore((s) => s.setUser);
   const userData = useTrackerStore((s) => s.user);
   
   const starsCount = (Object.values(stars || {}) as Star[]).filter((s) => s.inJar !== false).length;
   const stickersCount = (stickers || []).length;
  
-  
+  // Load user and tracker data if authenticated
   useEffect(() => {
-    // Load user and tracker data if authenticated
-    if (session?.user || localStorage.getItem("user")) {
+    if (isAuthorized) {
+      // If we have session user data, use it immediately as fallback
+      if (session?.user?.name || session?.user?.email) {
+        console.log("Setting user from session:", { name: session.user.name, email: session.user.email });
+        setUser({
+          name: session.user.name || "PixelCoder",
+          email: session.user.email || "guest@example.com",
+          joinDate: "January 2025",
+        });
+      }
+      // Then try to load full user data from API
       loadUser();
       loadAll();
     }
-  }, [loadAll, loadUser, session]);
+  }, [loadAll, loadUser, setUser, session, isAuthorized]);
+
+  // Don't render until authorized
+  if (isAuthorized === null) {
+    return null;
+  }
 
 
   const handleLogout = async () => {

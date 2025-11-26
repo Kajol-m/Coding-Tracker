@@ -142,21 +142,34 @@ const Auth = () => {
     setIsLoading(true);
 
     try {
-      await axios.post("/api/auth/register", {
+      const response = await axios.post("/api/auth/register", {
         user_name: formData.fullName,
         email: formData.email,
         password: formData.password,
       });
 
-      toast.success("Account created! Please sign in.");
-      setActiveTab("signin");
+      // Auto-login after successful registration
+      const createdAt = response.data.user.createdAt;
+      const joinDate = createdAt 
+        ? new Date(createdAt).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+        : "January 2025";
 
-      setFormData({
-        fullName: "",
-        email: "",
-        password: "",
-        confirmPassword: "",
-      });
+      // Save token + refreshToken + user
+      localStorage.setItem("token", response.data.token);
+      if (response.data.refreshToken) {
+        localStorage.setItem("refreshToken", response.data.refreshToken);
+      }
+      localStorage.setItem("user", JSON.stringify({
+        user_id: response.data.user.user_id,
+        user_name: response.data.user.user_name,
+        email: response.data.user.email,
+        provider: response.data.user.provider,
+        createdAt: response.data.user.createdAt,
+        joinDate,
+      }));
+
+      toast.success("Account created successfully! Logging in...");
+      router.push("/");
     } catch (err) {
       if (axios.isAxiosError(err)) {
         toast.error(
@@ -187,9 +200,25 @@ const Auth = () => {
 
       toast.success("Welcome back!");
 
-      // Save token + user (common for MongoDB JWT)
+      // Calculate joinDate from createdAt
+      const createdAt = response.data.user.createdAt;
+      const joinDate = createdAt 
+        ? new Date(createdAt).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+        : "January 2025";
+
+      // Save token + refreshToken + user (for JWT auth)
       localStorage.setItem("token", response.data.token);
-      localStorage.setItem("user", JSON.stringify(response.data.user));
+      if (response.data.refreshToken) {
+        localStorage.setItem("refreshToken", response.data.refreshToken);
+      }
+      localStorage.setItem("user", JSON.stringify({
+        user_id: response.data.user.user_id,
+        user_name: response.data.user.user_name,
+        email: response.data.user.email,
+        provider: response.data.user.provider,
+        createdAt: response.data.user.createdAt,
+        joinDate,
+      }));
 
       router.push("/");
     } catch (err) {

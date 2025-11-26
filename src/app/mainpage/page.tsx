@@ -9,6 +9,7 @@ import { StarDetailModal } from "@/components/StarDetailModal";
 import { toast } from "@/lib/toast";
 import { useRouter } from "next/navigation";
 import UserProfile from "@/components/UserProfile";
+import { useAuthGuard } from "@/hooks/useAuthGuard";
 
 import {
   loadDailyData,
@@ -26,7 +27,8 @@ import { useSession } from "next-auth/react";
 
 const Mainpage = () => {
   const router = useRouter();
-  const session=useSession();
+  const session = useSession();
+  const isAuthorized = useAuthGuard(); // Use auth guard hook
   // Reactive state from store (these are kept minimal and used for rendering)
   // We still keep some local state (modal toggles, selection)
   const dailyEntries = useTrackerStore((s) => s.dailyEntries);
@@ -47,12 +49,13 @@ const Mainpage = () => {
   const [selectedStar, setSelectedStar] = useState<Star | null>(null);
   const [isEditing, setIsEditing] = useState(false);
 
-  
+  // State for stats display
   const [starsCount, setStarsCount] = useState(0);
   const [collectedStickersCount, setCollectedStickersCount] = useState(0);
   const [maxStreak, setMaxStreak] = useState(0);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return; // Skip on server
     
     if (session?.data?.user || localStorage.getItem("user")) {
       loadAll().then(() => {
@@ -63,7 +66,7 @@ const Mainpage = () => {
       });
     }
     
-  }, [session]);
+  }, [session, loadAll]);
 
   
   useEffect(() => {
@@ -191,8 +194,9 @@ const Mainpage = () => {
 
       toast.success("Entry deleted successfully!");
     } catch (err) {
-      console.error("deleteEntry failed", err);
-      toast.error("Failed to delete entry.");
+      const errorMessage = err instanceof Error ? err.message : "Failed to delete entry";
+      console.error("deleteEntry failed:", errorMessage, err);
+      toast.error(errorMessage);
     } finally {
       setIsDetailModalOpen(false);
     }
@@ -233,6 +237,8 @@ const Mainpage = () => {
   const localStarsSnapshot = loadStars();
   const localStickersSnapshot: Sticker[] = loadStickers();
 
+  // Always render the outer structure (including footer) even before auth is complete
+  // This prevents footer blinking
   return (
     <div className="min-h-screen bg-background relative overflow-hidden flex flex-col">
       <div className="absolute top-10 left-10 text-4xl animate-sparkle"><img src="/sparkle-1.png" className="max-w-[100px]"/></div>
@@ -241,7 +247,8 @@ const Mainpage = () => {
       <div className="absolute top-50 left-20 text-3xl animate-sparkle" style={{ animationDelay: "0.5s" }}><img src="/sparkle-1.png" className="max-w-[100px]"/></div>
       <div className="absolute bottom-50 right-40 text-2xl animate-sparkle" style={{ animationDelay: "1s" }}><img src="/sparkle-2.png" className="max-w-[100px]"/></div>
 
-      {/* Main Content */}
+      {/* Main Content - Only render when authorized */}
+      {isAuthorized && (
       <div className="relative z-10 container mx-auto px-4 py-6 md:py-8 flex-1 flex flex-col justify-center">
         {/* User Profile - Top Right */}
         <div className="flex justify-end mb-4">
@@ -307,7 +314,7 @@ const Mainpage = () => {
           </div>
         </div>
       </div>
-
+      )}
       {/* Modals */}
       <AddEntryModal
         isOpen={isAddModalOpen}

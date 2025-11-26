@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Press_Start_2P } from "next/font/google";
 import "./globals.css";
 import AuthProvider from "@/components/AuthProvider";
-import Footer from "@/components/Footer";
+import ErrorBoundary from "@/components/ErrorBoundary";
 import { Toaster } from "sonner";
 
 const pressStart2P = Press_Start_2P({
@@ -23,10 +23,12 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${pressStart2P.className} antialiased`}>
-        <AuthProvider>
-          {children}
-        </AuthProvider>
-        <Toaster richColors position="top-center" />
+        <ErrorBoundary>
+          <AuthProvider>
+            {children}
+          </AuthProvider>
+          <Toaster richColors position="top-center" />
+        </ErrorBoundary>
       </body>
     </html>
   );

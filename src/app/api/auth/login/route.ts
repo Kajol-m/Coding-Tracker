@@ -1,11 +1,23 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import bcrypt from "bcryptjs";
 import connectDB from "@/lib/db";
 import User from "@/lib/models/Users";
 import { signToken, signRefreshToken } from "@/lib/auth";
+import { checkRateLimit, RATE_LIMITS } from "@/lib/rateLimit";
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
+    // Rate limiting: 5 attempts per 15 minutes per IP
+    const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
+    const rateLimitCheck = checkRateLimit(ip, RATE_LIMITS.LOGIN);
+    
+    if (!rateLimitCheck.allowed) {
+      return NextResponse.json(
+        { message: "Too many login attempts. Please try again later." },
+        { status: 429 }
+      );
+    }
+
     await connectDB();
 
     const { email, password } = await req.json();
@@ -56,11 +68,13 @@ export async function POST(req: Request) {
     const response = NextResponse.json({
       message: "Login successful",
       token,
+      refreshToken,
       user: {
         user_id: user.user_id,
         email: user.email,
         user_name: user.user_name,
         provider: user.provider,
+        createdAt: user.createdAt,
       },
     });
 

@@ -1,10 +1,23 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import bcrypt from "bcryptjs";
 import connectDB from "@/lib/db";
 import User from "@/lib/models/Users";
+import { checkRateLimit, RATE_LIMITS } from "@/lib/rateLimit";
+import { signToken, signRefreshToken } from "@/lib/auth";
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
+    // Rate limiting: 3 attempts per hour per IP
+    const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
+    const rateLimitCheck = checkRateLimit(ip, RATE_LIMITS.REGISTER);
+    
+    if (!rateLimitCheck.allowed) {
+      return NextResponse.json(
+        { message: "Too many registration attempts. Please try again later." },
+        { status: 429 }
+      );
+    }
+
     await connectDB();
 
     const { user_name, email, password } = await req.json();
@@ -42,10 +55,47 @@ export async function POST(req: Request) {
       provider: "local",
     });
 
-    return NextResponse.json(
-      { message: "User registered successfully", user },
+    // Auto-login after registration by generating tokens
+    const tokenPayload = {
+      id: user.user_id,
+      email: user.email,
+    };
+
+    const token = signToken(tokenPayload);
+    const refreshToken = signRefreshToken(tokenPayload);
+
+    const response = NextResponse.json(
+      {
+        message: "User registered successfully",
+        token,
+        refreshToken,
+        user: {
+          user_id: user.user_id,
+          user_name: user.user_name,
+          email: user.email,
+          provider: user.provider,
+          createdAt: user.createdAt,
+        },
+      },
       { status: 201 }
     );
+
+    // Set httpOnly cookies
+    response.cookies.set('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 15 * 60 // 15 minutes
+    });
+
+    response.cookies.set('refreshToken', refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 // 7 days
+    });
+
+    return response;
 
   } catch (error) {
     console.error("REGISTER ERROR:", error);
@@ -55,3 +105,4 @@ export async function POST(req: Request) {
     );
   }
 }
+

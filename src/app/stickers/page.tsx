@@ -5,6 +5,7 @@ import type { Sticker } from "@/types/tracker";
 import { PixelButton } from "@/components/ui/pixel-button";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
+import { useAuthGuard } from "@/hooks/useAuthGuard";
 import UserProfile from "@/components/UserProfile";
 
 const ALL_STICKERS = [
@@ -20,21 +21,16 @@ const ALL_STICKERS = [
 const StickersCollection = () => {
   const navigate = useRouter();
   const { data: session, status } = useSession();
+  const isAuthorized = useAuthGuard(); // Use auth guard hook
 
-  const isAuthenticated = session?.user || localStorage.getItem("token");
-  const [collectedStickers] = useState<Sticker[]>(() => 
-    isAuthenticated ? loadStickers() : []
-  );
+  // Initialize stickers from localStorage (client-side only)
+  const [collectedStickers] = useState<Sticker[]>(() => {
+    if (typeof window === 'undefined') return [];
+    const isAuthenticated = session?.user || localStorage.getItem("token");
+    return isAuthenticated ? loadStickers() : [];
+  });
 
-  useEffect(() => {
-    if (status === "loading") return;
-    
-    if (!isAuthenticated) {
-      navigate.push("/auth");
-    }
-  }, [status, navigate, isAuthenticated]);
-
-  if (status === "loading" || !isAuthenticated) {
+  if (status === "loading" || isAuthorized === null) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-primary font-pixel">Loading...</div>

@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
+import { useAuthGuard } from "@/hooks/useAuthGuard";
 import { useTrackerStore } from "@/lib/store/userTrackerStore";
 import type { DailyDataMap } from "@/types/tracker";
 import {
@@ -27,6 +28,7 @@ interface LanguageStats {
 export default function Statistics() {
   const navigate = useRouter();
   const { data: session, status } = useSession();
+  const isAuthorized = useAuthGuard(); // Use auth guard hook
   const [languageStats, setLanguageStats] = useState<LanguageStats[]>([]);
   const [totalQuestions, setTotalQuestions] = useState(0);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -36,6 +38,8 @@ export default function Statistics() {
 
   useEffect(() => {
     if (status === "loading") return;
+    
+    if (typeof window === 'undefined') return; // Skip on server
     
     if (!session?.user && !localStorage.getItem("token")) {
       navigate.push("/auth");

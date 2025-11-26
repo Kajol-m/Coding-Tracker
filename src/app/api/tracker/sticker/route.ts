@@ -1,17 +1,18 @@
 // app/api/tracker/sticker/route.ts
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import connectDB from "@/lib/db";
 import Sticker from "@/lib/models/sticker";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { getAuthenticatedUser } from "@/lib/authMiddleware";
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
-    await connectDB();
-    const session = await getServerSession(authOptions);
-    if (!session || !session.user?.email) return NextResponse.json({ message: "Unauthenticated" }, { status: 401 });
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) {
+      return NextResponse.json({ message: "Unauthenticated" }, { status: 401 });
+    }
 
-    const user_id = session.user.user_id || session.user.email;
+    await connectDB();
+    const user_id = authUser.user_id;
     const { stickerId, name, image } = await req.json();
     if (!stickerId) return NextResponse.json({ message: "Missing stickerId" }, { status: 400 });
 

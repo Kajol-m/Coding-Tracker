@@ -4,17 +4,91 @@ import axios from "axios";
 // Configure axios defaults
 axios.defaults.withCredentials = true;
 
+// Track if we're already trying to refresh to avoid infinite loops
+let isRefreshing = false;
+let failedQueue: Array<(token: string) => void> = [];
+
+const processQueue = (token: string) => {
+  failedQueue.forEach(prom => prom(token));
+  failedQueue = [];
+};
+
 // Configure axios to include auth token
+// IMPORTANT: Only use Authorization header if JWT is in localStorage (for local auth)
+// Otherwise rely on httpOnly cookies which are sent automatically
 axios.interceptors.request.use((config) => {
   if (typeof window !== "undefined") {
-    // Try JWT token first (for local auth)
+    // Only add Authorization header if we have a token in localStorage
+    // This is for local email/password auth fallback
     const token = localStorage.getItem("token");
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
+    // If no localStorage token, the browser will automatically send httpOnly cookies
   }
   return config;
 });
+
+// Response interceptor to handle token refresh on 401
+axios.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const originalRequest = error.config;
+
+    // If error is 401 and we haven't tried to refresh yet
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      if (isRefreshing) {
+        // Queue the original request to retry after refresh completes
+        return new Promise((resolve) => {
+          failedQueue.push((token: string) => {
+            originalRequest.headers.Authorization = `Bearer ${token}`;
+            resolve(axios(originalRequest));
+          });
+        });
+      }
+
+      originalRequest._retry = true;
+      isRefreshing = true;
+
+      // Try to refresh the token
+      if (typeof window !== "undefined") {
+        const refreshToken = localStorage.getItem("refreshToken");
+        if (refreshToken) {
+          return axios
+            .post("/api/auth/refresh", { refreshToken })
+            .then((res) => {
+              const newToken = res.data.token;
+              localStorage.setItem("token", newToken);
+              originalRequest.headers.Authorization = `Bearer ${newToken}`;
+              processQueue(newToken);
+              return axios(originalRequest);
+            })
+            .catch(() => {
+              // Refresh failed, clear tokens and redirect to auth
+              localStorage.removeItem("token");
+              localStorage.removeItem("refreshToken");
+              localStorage.removeItem("user");
+              window.location.href = "/auth";
+              return Promise.reject(error);
+            })
+            .finally(() => {
+              isRefreshing = false;
+            });
+        } else {
+          // No refresh token in localStorage, but we got 401
+          // This means auth failed entirely (maybe cookies expired)
+          localStorage.removeItem("token");
+          localStorage.removeItem("user");
+          isRefreshing = false;
+          window.location.href = "/auth";
+          return Promise.reject(error);
+        }
+      }
+    }
+
+    return Promise.reject(error);
+  }
+);
 
 // ---------- Types ----------
 export type Question = { text: string; languages: string[] };
@@ -89,6 +163,44 @@ type TrackerState = {
 //                    ZUSTAND STORE
 // ---------------------------------------------------------
 
+// Helper: Load user from localStorage on init
+const initializeUserFromStorage = (): UserData => {
+  if (typeof window === "undefined") {
+    return {
+      name: "Guest",
+      email: "guest@example.com",
+      joinDate: "January 2025",
+    };
+  }
+  
+  try {
+    const storedUser = localStorage.getItem("user");
+    if (storedUser) {
+      const parsed = JSON.parse(storedUser);
+      
+      // Try to use joinDate if available, otherwise calculate from createdAt
+      let joinDate = parsed.joinDate || "January 2025";
+      if (!parsed.joinDate && parsed.createdAt) {
+        joinDate = new Date(parsed.createdAt).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+      }
+      
+      return {
+        name: parsed.user_name || parsed.name || "Guest",
+        email: parsed.email || "guest@example.com",
+        joinDate,
+      };
+    }
+  } catch (err) {
+    console.warn("Failed to parse stored user data:", err);
+  }
+  
+  return {
+    name: "Guest",
+    email: "guest@example.com",
+    joinDate: "January 2025",
+  };
+};
+
 export const useTrackerStore = create<TrackerState>((set, get) => ({
   dailyEntries: {},
   stars: {},
@@ -96,11 +208,7 @@ export const useTrackerStore = create<TrackerState>((set, get) => ({
   maxStreak: 0,
   loading: false,
   lastFetch: 0,
-  user: {
-    name: "Guest",
-    email: "guest@example.com",
-    joinDate: "January 2025",
-  },
+  user: initializeUserFromStorage(),
 
   // ---------------------------------------------------------
   // Helper: compute max streak from dailyEntries map
@@ -109,7 +217,6 @@ export const useTrackerStore = create<TrackerState>((set, get) => ({
   // Expects keys as YYYY-MM-DD strings (or comparable sortable strings).
   // Returns the longest run of consecutive 'done' statuses.
   // This keeps the UI responsive by deriving maxStreak locally on optimistic updates.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   // (We declare it here as an internal helper via get(), not part of public TrackerState)
   // We'll implement it as a local function below when needed.
 
@@ -246,13 +353,18 @@ export const useTrackerStore = create<TrackerState>((set, get) => ({
   // ---------------------------------------------------------
   deleteEntry: async (date) => {
     const { dailyEntries, stars } = get();
+    const starId = `star-${date}`;
+    
+    // Save original state for rollback
+    const originalDailyEntries = dailyEntries;
+    const originalStars = stars;
+    const originalMaxStreak = get().maxStreak;
     
     // Optimistic update - remove immediately from UI
     const newDailyEntries = { ...dailyEntries };
     delete newDailyEntries[date];
     
     const newStars = { ...stars };
-    const starId = `star-${date}`;
     delete newStars[starId];
     
     // recompute max streak after deletion
@@ -288,6 +400,7 @@ export const useTrackerStore = create<TrackerState>((set, get) => ({
 
     const newMax = computeMaxStreakFromMap(newDailyEntries);
 
+    // Apply optimistic update
     set({ 
       dailyEntries: newDailyEntries,
       stars: newStars,
@@ -295,16 +408,37 @@ export const useTrackerStore = create<TrackerState>((set, get) => ({
     });
     
     try {
-      await axios.delete(`/api/tracker/entry?date=${encodeURIComponent(date)}`);
-      // Reload to sync with server state
+      // Make the DELETE request with explicit error handling
+      const response = await axios.delete(`/api/tracker/entry?date=${encodeURIComponent(date)}`);
+      console.log(`Successfully deleted entry for ${date}`);
+      
+      // Reload to sync with server state and recalculate streaks
       await get().loadAll();
     } catch (err) {
       // Revert optimistic update on error
+      console.error(`deleteEntry error for ${date}:`, err);
       set({ 
-        dailyEntries,
-        stars
+        dailyEntries: originalDailyEntries,
+        stars: originalStars,
+        maxStreak: originalMaxStreak,
       });
-      console.error("deleteEntry error", err);
+      
+      // Log detailed error info
+      if (axios.isAxiosError(err)) {
+        const status = err.response?.status;
+        const message = err.response?.data?.message || err.message;
+        console.error(`API error (${status}): ${message}`);
+        
+        // Throw a user-friendly error
+        if (status === 401) {
+          throw new Error("Unauthorized: Please log in again");
+        } else if (status === 400) {
+          throw new Error(`Invalid request: ${message}`);
+        } else {
+          throw new Error(`Failed to delete entry: ${message}`);
+        }
+      }
+      
       throw err;
     }
   },
@@ -354,21 +488,43 @@ export const useTrackerStore = create<TrackerState>((set, get) => ({
       const res = await axios.get("/api/user/profile");
       const data = res.data;
       
+      if (!data) {
+        console.warn("No user data returned from API");
+        return;
+      }
+      
       const joinDate = data.createdAt ? 
         new Date(data.createdAt).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) :
         "January 2025";
       
-      set({ 
-        user: {
-          name: data.user_name || "PixelCoder",
-          email: data.email || "guest@example.com",
-          joinDate,
-          provider: data.provider || "local",
-          createdAt: data.createdAt
-        }
-      });
+      const userData = {
+        name: data.user_name || "PixelCoder",
+        email: data.email || "guest@example.com",
+        joinDate,
+        provider: data.provider || "local",
+        createdAt: data.createdAt
+      };
+      
+      set({ user: userData });
+      
+      // Also save to localStorage for offline access
+      if (typeof window !== "undefined") {
+        localStorage.setItem("user", JSON.stringify({ 
+          user_name: userData.name, 
+          email: userData.email, 
+          joinDate: userData.joinDate,
+          provider: userData.provider,
+          createdAt: userData.createdAt
+        }));
+      }
     } catch (err) {
-      console.error("Failed to load user data", err);
+      const axiosErr = err as Error & { response?: { status: number; data: unknown } };
+      console.error("Failed to load user data from API:", {
+        message: axiosErr?.message,
+        status: axiosErr?.response?.status,
+        data: axiosErr?.response?.data,
+      });
+      // Error is silently caught, user will show from localStorage (see init)
     }
   },
 
